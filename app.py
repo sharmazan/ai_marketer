@@ -3,9 +3,11 @@ import openai
 import os
 import json
 from datetime import datetime
-import requests
 from pathlib import Path
 from dotenv import load_dotenv
+from content_fetcher import ContentFetcher
+from style_analyzer import StyleAnalyzer
+from prompt_builder import PromptBuilder
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +32,10 @@ if not OPENAI_API_KEY or OPENAI_API_KEY == "your_openai_api_key_here":
     st.error("⚠️ OpenAI API key not found! Please set OPENAI_API_KEY in your .env file.")
     st.stop()
 
+# Initialize helpers
+fetcher = ContentFetcher()
+analyzer = StyleAnalyzer()
+
 # Initialize session state
 if 'generated_articles' not in st.session_state:
     st.session_state.generated_articles = []
@@ -52,46 +58,38 @@ def save_log(entry):
         json.dump(log, f, indent=2)
 
 def fetch_article_content(url):
-    """Fetch content from URL (simplified version)"""
+    """Fetch content from URL and return cleaned HTML and text."""
     try:
-        response = requests.get(url, timeout=10)
-        # This is a simplified version - in production you'd want proper HTML parsing
-        return response.text[:2000]  # Limit content length
-    except:
-        return f"Could not fetch content from {url}"
-
-def generate_article(topic, example_articles, openai_api_key):
+        return fetcher.fetch(url)
+    except Exception:
+        return "", f"Could not fetch content from {url}"
+def generate_article(topic, example_articles, style_profile, openai_api_key):
     """Generate article using OpenAI API"""
     try:
         client = openai.OpenAI(api_key=openai_api_key)
-        
-        # Prepare the prompt
-        examples_text = "\n\n".join([f"Example {i+1}:\n{content}" for i, content in enumerate(example_articles)])
-        
-        prompt = f"""
-        Create a marketing article on the topic: "{topic}"
-        
-        Please write in a similar style to these examples:
-        {examples_text}
-        
-        The article should be:
-        - Engaging and professional
-        - Well-structured with clear sections
-        - Include practical insights
-        - Be around 500-800 words
-        - Follow the writing style and tone of the provided examples
-        """
-        
+
+        builder = PromptBuilder(
+            topic,
+            example_articles,
+            style_profile,
+            {
+                "h1": True,
+                "h2": style_profile.get("has_subheadings"),
+                "bullets": style_profile.get("list_frequency", 0) > 0,
+                "cta": True,
+                "conclusion": True,
+            },
+        )
+        system_prompt, user_prompt = builder.build_prompts()
+
         response = client.chat.completions.create(
             model="gpt-5",
             messages=[
-                {"role": "system", "content": "You are an expert marketing content writer. Write articles in plain text format only. Do not use HTML tags, markdown formatting, or any markup language. Return clean, readable text with proper line breaks and spacing."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
-            # max_tokens=3000,
-            # temperature=0.8
         )
-        
+
         return response.choices[0].message.content
     except Exception as e:
         return f"Error generating article: {str(e)}"
@@ -186,7 +184,7 @@ with tab2:
             for i, url in enumerate(example_urls):
                 st.write(f"**Example {i+1}:** {url}")
                 with st.spinner(f"Fetching content from example {i+1}..."):
-                    content = fetch_article_content(url)
+                    _, content = fetch_article_content(url)
                     st.text_area(f"Content preview {i+1}:", content[:500] + "...", height=100, disabled=True)
 
 with tab3:
@@ -200,16 +198,20 @@ with tab3:
             st.error("Please provide at least one example article URL in the second tab.")
         else:
             with st.spinner("Generating your article... This may take a few moments."):
-                # Fetch example articles
+                # Fetch example articles and analyze style
                 example_articles = []
+                style_data = []
                 for url in st.session_state.example_urls:
-                    content = fetch_article_content(url)
+                    html, content = fetch_article_content(url)
                     example_articles.append(content)
-                
+                    style_data.append(analyzer.analyze(html))
+                style_profile = analyzer.aggregate(style_data)
+
                 # Generate article
                 article = generate_article(
                     st.session_state.topic,
                     example_articles,
+                    style_profile,
                     OPENAI_API_KEY
                 )
                 
