@@ -56,7 +56,7 @@ A Streamlit web application that generates marketing articles using OpenAI's GPT
 ## Features Details
 
 ### Article Generation
-- Uses OpenAI's GPT-3.5-turbo model
+- Uses OpenAI's GPT-5 model
 - Incorporates style examples from provided URLs
 - Generates 500-800 word marketing articles
 - Maintains professional and engaging tone
